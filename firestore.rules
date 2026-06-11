@@ -1,0 +1,54 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // --- Users Collection ---
+    match /users/{userId} {
+      // Anyone can look up profiles for receiving/sharing, but writes must be owner
+      allow read: if true;
+      allow create, update: if isOwner(userId);
+      allow delete: if false; // profiles are permanent
+    }
+
+    // --- Files Collection ---
+    match /files/{fileId} {
+      // Shared file downloads/previews are public via unique URL
+      allow read: if true;
+      // Authenticated owners can manage files
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // --- Collections ---
+    match /collections/{collectionId} {
+      allow read: if true;
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // --- Views Collection ---
+    match /views/{viewId} {
+      // Traffic views logging is public; reads are permitted for stats rendering
+      allow read, create: if true;
+      allow update, delete: if false;
+    }
+  }
+}

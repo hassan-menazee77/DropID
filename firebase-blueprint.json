@@ -1,0 +1,81 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Represents the user account, plan details, and total storage usage in bytes.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The unique user authentication ID." },
+        "email": { "type": "string", "description": "User email address." },
+        "uniqueId": { "type": "string", "description": "The custom formatted immutable member tag (e.g. MARK-7X9K) used for recipient navigation." },
+        "plan": { "type": "string", "enum": ["free", "pro"], "description": "Account subscription plan tier." },
+        "storageUsed": { "type": "number", "description": "Amount of bytes currently occupied by uploaded files." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when profile was created." }
+      },
+      "required": ["id", "email", "uniqueId", "plan", "storageUsed", "createdAt"]
+    },
+    "SharedFile": {
+      "title": "SharedFile",
+      "description": "Information about metadata of uploaded files. The file payload itself is saved in Supabase storage, and this record saves its public download URL.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier for this shared file." },
+        "userId": { "type": "string", "description": "The owner's user authentication ID." },
+        "userUniqueId": { "type": "string", "description": "The owner's active member tag (uniqueId) for folder reference." },
+        "name": { "type": "string", "description": "Original file name." },
+        "type": { "type": "string", "description": "MIME type of the file." },
+        "size": { "type": "number", "description": "File size in bytes." },
+        "url": { "type": "string", "description": "The public storage download URL on Supabase." },
+        "thumbnail": { "type": "string", "description": "Optional file thumbnail representation or base64 description." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when file record was registered." },
+        "expiresAt": { "type": "string", "format": "date-time", "description": "Null if permanent file, or timestamp of expiration." },
+        "collectionId": { "type": "string", "description": "Optional associated collection/folder ID." },
+        "downloadsCount": { "type": "number", "description": "Tracking how many times this file has been opened or downloaded." }
+      },
+      "required": ["id", "userId", "userUniqueId", "name", "type", "size", "url", "createdAt", "downloadsCount"]
+    },
+    "Collection": {
+      "title": "Collection",
+      "description": "Custom grouping or folder created by users to organize files.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Folder unique ID." },
+        "userId": { "type": "string", "description": "User authentication ID of the owner." },
+        "name": { "type": "string", "description": "Given folder/collection name." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp." }
+      },
+      "required": ["id", "userId", "name", "createdAt"]
+    },
+    "SystemView": {
+      "title": "SystemView",
+      "description": "Visual or traffic capture analytic tracking visits for stats computation.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Analytic capture event ID." },
+        "fileOwnerId": { "type": "string", "description": "The recipient's owner user authentication ID." },
+        "userUniqueId": { "type": "string", "description": "The owner unique ID signature path visited." },
+        "viewerIP": { "type": "string", "description": "Track record of client access IP address." },
+        "timestamp": { "type": "string", "format": "date-time", "description": "Timestamp of visiting." }
+      },
+      "required": ["id", "fileOwnerId", "userUniqueId", "viewerIP", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Primary user configuration records."
+    },
+    "/files/{fileId}": {
+      "schema": "SharedFile",
+      "description": "Global table mapping all files of different users, with owner index fields."
+    },
+    "/collections/{collectionId}": {
+      "schema": "Collection",
+      "description": "Folders created by users to cluster files."
+    },
+    "/views/{viewId}": {
+      "schema": "SystemView",
+      "description": "Capture logs for view traffic computation."
+    }
+  }
+}

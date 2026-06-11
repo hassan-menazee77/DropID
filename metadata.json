@@ -1,0 +1,6 @@
+{
+  "name": "DropID",
+  "description": "Premium high-speed file sharing SaaS. Share files via unique personal IDs instantly with zero quality loss.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
