@@ -7,10 +7,16 @@ import { initializeApp } from "firebase/app";
 import { getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, query, where } from "firebase/firestore";
 import { createClient } from "@supabase/supabase-js";
 
-// Ensure standard storage directories exist
-const UPLOADS_DIR = path.resolve("./uploads");
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+const UPLOADS_DIR = process.env.NODE_ENV === "production" 
+  ? "/tmp/uploads" 
+  : path.resolve("./uploads");
+
+try {
+  if (!fs.existsSync(UPLOADS_DIR)) {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  }
+} catch (e) {
+  console.warn("Could not create uploads dir:", e);
 }
 
 // Initialize Supabase Storage Client
@@ -35,15 +41,14 @@ try {
   console.error("Failed to initialize Firebase Firestore in server.ts:", e);
 }
 
-const DB_FILE = path.resolve("./server_db.json");
+const DB_FILE = path.resolve("/tmp/server_db.json");
 interface LocalDatabase {
-  users: Record<string, UserProfile>; // email -> profile or userId -> profile
-  files: Record<string, SharedFile>;  // fileId -> SharedFile
-  collections: Record<string, Collection>; // colId -> Collection
+  users: Record<string, UserProfile>;
+  files: Record<string, SharedFile>;
+  collections: Record<string, Collection>;
   views: SystemView[];
 }
 
-// Read or initialize JSON database (Fallback)
 function readDB(): LocalDatabase {
   if (!fs.existsSync(DB_FILE)) {
     const defaultDB: LocalDatabase = {
@@ -66,7 +71,6 @@ function writeDB(data: LocalDatabase) {
   fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 }
 
-// Generate random ID suffix (e.g., 7X9K)
 function generateSuffix(): string {
   const chars = "ABCDEFGHJKLMNOPQRSTUVWXYZ23456789";
   let result = "";
@@ -76,13 +80,11 @@ function generateSuffix(): string {
   return result;
 }
 
-// Multer Storage Configuration
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, UPLOADS_DIR);
   },
   filename: (req, file, cb) => {
-    // Save with unique id to prevent overwriting
     const uniqueId = Date.now() + "-" + Math.round(Math.random() * 1e9);
     cb(null, uniqueId + "-" + file.originalname);
   }
@@ -90,7 +92,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 2147483648 } // 2GB limit (handled gracefully)
+  limits: { fileSize: 2147483648 }
 });
 
 const app = express();
@@ -100,14 +102,10 @@ app.use(express.json());
 
 async function startServer() {
 
-  // --- API ROUTES ---
-
-  // Health check
   app.get("/api/health", (req, res) => {
     res.json({ status: "healthy", time: new Date().toISOString() });
   });
 
-  // Get or Register User Profile
   app.post("/api/user-profile", async (req, res) => {
     const { email, userId } = req.body;
     if (!email || !userId) {
@@ -122,7 +120,6 @@ async function startServer() {
         if (userSnap.exists()) {
           profile = userSnap.data() as UserProfile;
         } else {
-          // Fallback check by email (in case of legacy account mappings)
           const q = query(collection(db, "users"), where("email", "==", email));
           const qSnap = await getDocs(q);
           if (!qSnap.empty) {
@@ -135,7 +132,6 @@ async function startServer() {
       }
 
       if (!profile) {
-        // Create profile
         const namePart = email.split("@")[0].toUpperCase().replace(/[^A-Z0-9]/g, "");
         const generatedId = `${namePart || "USER"}-${generateSuffix()}`;
 
@@ -164,7 +160,6 @@ async function startServer() {
     }
   });
 
-  // Update Plan (Free <-> Pro toggle for demonstration)
   app.post("/api/user-profile/toggle-plan", async (req, res) => {
     const { userId } = req.body;
     if (!userId) {
@@ -201,7 +196,6 @@ async function startServer() {
     }
   });
 
-  // Update Unique ID (Pro Custom ID Feature)
   app.post("/api/user-profile/custom-id", async (req, res) => {
     const { userId, customId } = req.body;
     if (!userId || !customId) {
@@ -239,7 +233,6 @@ async function startServer() {
         user.uniqueId = sanitizedId;
         await setDoc(userRef, user);
 
-        // Migrate existing shared files to the new ID
         const filesQ = query(collection(db, "files"), where("userId", "==", userId));
         const filesSnap = await getDocs(filesQ);
         for (const fileDoc of filesSnap.docs) {
@@ -279,7 +272,6 @@ async function startServer() {
     }
   });
 
-  // File Upload (supports single or multi upload) - UPLOADING ONLY TO SUPABASE STORAGE
   app.post("/api/upload", upload.array("files"), async (req, res) => {
     const { userId, collectionId } = req.body;
     const uploadedFiles = req.files as Express.Multer.File[];
@@ -313,8 +305,8 @@ async function startServer() {
       }
 
       const totalSize = uploadedFiles.reduce((acc, f) => acc + f.size, 0);
-      const freeLimit = 2 * 1024 * 1024 * 1024; // 2GB
-      const proLimit = 100 * 1024 * 1024 * 1024; // 100GB
+      const freeLimit = 2 * 1024 * 1024 * 1024;
+      const proLimit = 100 * 1024 * 1024 * 1024;
       const maxLimit = user.plan === "pro" ? proLimit : freeLimit;
 
       if (user.storageUsed + totalSize > maxLimit) {
@@ -329,7 +321,6 @@ async function startServer() {
       for (const f of uploadedFiles) {
         const fileId = "file-" + Math.random().toString(36).substring(2, 11).toUpperCase();
         
-        // 1. Upload file buffer to Supabase Storage
         const fileBuffer = fs.readFileSync(f.path);
         const storageFilePath = `${user.id}/${f.filename}`;
 
@@ -344,17 +335,14 @@ async function startServer() {
           throw uploadError;
         }
 
-        // 2. Clear temp file from local server disk space
         try { fs.unlinkSync(f.path); } catch (e) {}
 
-        // 3. Get Public URL
         const { data: publicUrlData } = supabase.storage
           .from(SUPABASE_BUCKET)
           .getPublicUrl(storageFilePath);
 
         const publicUrl = publicUrlData.publicUrl;
 
-        // Auto-expire after 7 days if free user
         const expiresAt = user.plan === "pro" 
           ? null 
           : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -375,7 +363,6 @@ async function startServer() {
 
         (newFile as any).supabasePath = storageFilePath;
 
-        // 4. Save metadata records in Firebase Firestore
         if (db) {
           await setDoc(doc(db, "files", fileId), newFile);
         } else {
@@ -387,7 +374,6 @@ async function startServer() {
         responseFiles.push(newFile);
       }
 
-      // Update storage used
       user.storageUsed += totalSize;
       if (db) {
         await setDoc(doc(db, "users", userId), user);
@@ -407,7 +393,6 @@ async function startServer() {
     }
   });
 
-  // Get Files by User Unique ID (Receiver Page, no login needed)
   app.get("/api/files/by-id/:uniqueId", async (req, res) => {
     const { uniqueId } = req.params;
     const queryIp = req.ip || "unknown";
@@ -419,7 +404,6 @@ async function startServer() {
       let viewsCount = 0;
 
       if (db) {
-        // Find owner
         const userQ = query(collection(db, "users"), where("uniqueId", "==", sanitizedId));
         const userSnap = await getDocs(userQ);
         if (userSnap.empty) {
@@ -427,7 +411,6 @@ async function startServer() {
         }
         owner = userSnap.docs[0].data() as UserProfile;
 
-        // Find active files
         const filesQ = query(collection(db, "files"), where("userUniqueId", "==", sanitizedId));
         const filesSnap = await getDocs(filesQ);
         const now = Date.now();
@@ -435,12 +418,11 @@ async function startServer() {
           .map(doc => doc.data() as SharedFile)
           .filter(file => {
             if (file.expiresAt && new Date(file.expiresAt).getTime() < now) {
-              return false; // ignore expired files
+              return false;
             }
             return true;
           });
 
-        // Log tracking view in Firestore
         const viewId = "view-" + Math.random().toString(36).substring(2, 11);
         const newView: SystemView = {
           id: viewId,
@@ -451,7 +433,6 @@ async function startServer() {
         };
         await setDoc(doc(db, "views", viewId), newView);
 
-        // Count total views
         const viewsQ = query(collection(db, "views"), where("userUniqueId", "==", sanitizedId));
         const viewsSnap = await getDocs(viewsQ);
         viewsCount = viewsSnap.size;
@@ -499,7 +480,6 @@ async function startServer() {
     }
   });
 
-  // Get Analytics & Stats (Dashboard usage)
   app.get("/api/user/stats/:userId", async (req, res) => {
     const { userId } = req.params;
 
@@ -548,7 +528,6 @@ async function startServer() {
     }
   });
 
-  // Download File (Direct Streaming / original quality from Supabase)
   app.get("/api/download/:fileId", async (req, res) => {
     const { fileId } = req.params;
 
@@ -570,18 +549,15 @@ async function startServer() {
         return res.status(404).send("File not found");
       }
 
-      // Check expiration
       if (fileMeta.expiresAt && new Date(fileMeta.expiresAt).getTime() < Date.now()) {
         return res.status(410).send("File has expired");
       }
 
-      // Stream the file back from Supabase Storage public address
       const downloadResponse = await fetch(fileMeta.url);
       if (!downloadResponse.ok) {
         return res.status(404).send("File contents could not be retrieved from Supabase Storage.");
       }
 
-      // Increment download count in database
       if (db) {
         await updateDoc(doc(db, "files", fileId), {
           downloadsCount: (fileMeta.downloadsCount || 0) + 1
@@ -610,7 +586,6 @@ async function startServer() {
     }
   });
 
-  // Delete individual file
   app.delete("/api/files/:fileId", async (req, res) => {
     const { fileId } = req.params;
     const { userId } = req.body;
@@ -636,7 +611,6 @@ async function startServer() {
           return res.status(403).json({ error: "Access denied" });
         }
 
-        // 1. Delete from Supabase Storage
         const supabasePath = (fileMeta as any).supabasePath || `${fileMeta.userId}/${fileMeta.id}`;
         try {
           const { error: deleteError } = await supabase.storage
@@ -649,10 +623,8 @@ async function startServer() {
           console.error("Failed to delete from Supabase storage:", e);
         }
 
-        // 2. Delete Firestore Document entry
         await deleteDoc(fileRef);
 
-        // 3. Recalculate physical storage occupied
         const userRef = doc(db, "users", userId);
         const userSnap = await getDoc(userRef);
         if (userSnap.exists()) {
@@ -679,7 +651,6 @@ async function startServer() {
           return res.status(403).json({ error: "Access denied" });
         }
 
-        // Locally remove physically if fallbacks triggered
         const fileNameOnDisk = (fileMeta as any).fileNameOnDisk;
         const filePath = path.join(UPLOADS_DIR, fileNameOnDisk);
         try {
@@ -710,7 +681,6 @@ async function startServer() {
     }
   });
 
-  // Get collections
   app.get("/api/collections/:userId", async (req, res) => {
     const { userId } = req.params;
 
@@ -731,7 +701,6 @@ async function startServer() {
     }
   });
 
-  // Create collections
   app.post("/api/collections", async (req, res) => {
     const { userId, name } = req.body;
     if (!userId || !name) {
@@ -762,7 +731,6 @@ async function startServer() {
     }
   });
 
-  // Delete collection
   app.delete("/api/collections/:colId", async (req, res) => {
     const { colId } = req.params;
     const { userId } = req.body;
@@ -779,7 +747,6 @@ async function startServer() {
           return res.status(403).json({ error: "Unauthorized" });
         }
 
-        // Reset collectionId of files in this collection to null
         const filesQ = query(collection(db, "files"), where("collectionId", "==", colId));
         const filesSnap = await getDocs(filesQ);
         for (const fileDoc of filesSnap.docs) {
@@ -816,7 +783,6 @@ async function startServer() {
     }
   });
 
-  // Bulk set file collection
   app.post("/api/files/add-to-collection", async (req, res) => {
     const { fileIds, collectionId, userId } = req.body;
     if (!fileIds || !Array.isArray(fileIds) || !userId) {
@@ -855,9 +821,6 @@ async function startServer() {
     }
   });
 
-
-  // --- VITE MIDDLEWARE SETUP ---
-
   const distPath = path.join(process.cwd(), "dist");
   if (fs.existsSync(distPath)) {
     app.use(express.static(distPath));
@@ -867,7 +830,6 @@ async function startServer() {
     });
   }
 
-  // For local development only
   if (process.env.NODE_ENV !== "production") {
     app.listen(PORT, "0.0.0.0", () => {
       console.log(`DropID server running on http://0.0.0.0:${PORT}`);
@@ -879,5 +841,4 @@ startServer().catch(err => {
   console.error("Error starting DropID app server:", err);
 });
 
-// Export for Vercel serverless
 export default app;
